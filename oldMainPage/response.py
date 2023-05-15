@@ -20,13 +20,18 @@ def loadModel():
     global model, tokenizer, summarizer
     # model_name = "Bigdwarf43/results"
     
-    model_path = "C:/Users/yashw/.cache/huggingface/hub/models--Bigdwarf43--results/snapshots/f4da98c25966a7260ed890a62a8461ac3a5a2b17/"
+    # model_path = "C:/Users/yashw/.cache/huggingface/hub/models--Bigdwarf43--results/snapshots/f4da98c25966a7260ed890a62a8461ac3a5a2b17/"
+    model_path = "sshleifer/distilbart-xsum-12-3"
 
-    model = AutoModelForSeq2SeqLM.from_pretrained(model_path)
+    model = BartForConditionalGeneration.from_pretrained(model_path)
     tokenizer = BartTokenizer.from_pretrained(model_path)
     summarizer = pipeline(task="summarization", model=model, tokenizer= tokenizer)
     print("modelLoaded")
 
+def summarizeTextWithoutChunking(input):
+    global summarizer
+    output = summarizer(input)
+    return output
 
 def approach1(input):
     # global summarizer
@@ -64,10 +69,20 @@ def generate_summary(nested_sentences):
   for nested in nested_sentences:
     input_tokenized = tokenizer.encode(' '.join(nested), truncation=True, return_tensors='pt')
     input_tokenized = input_tokenized.to(device)
+
+    # dct = tokenizer.batch_encode_plus(nested,
+    #                                       max_length=1024,
+    #                                       truncation=True,
+    #                                       padding='max_length',
+    #                                       return_tensors="pt")
     summary_ids = model.to(device).generate(input_tokenized,
-                                      length_penalty=3.0,
-                                      min_length=30,
-                                      max_length=100)
+            num_beams=4,
+            length_penalty=2.0,
+            max_length=142,
+            min_length=56,
+            no_repeat_ngram_size=3,
+            early_stopping=True,
+            decoder_start_token_id=tokenizer.eos_token_id,)
     output = [tokenizer.decode(g, skip_special_tokens=True, clean_up_tokenization_spaces=False) for g in summary_ids]
     summaries.append(output)
   summaries = [sentence for sublist in summaries for sentence in sublist]
@@ -204,9 +219,9 @@ def approach4( text):
 
         chunk_summaries.append(output)
 
-    summaries = [  __clean_text(text) for chunk_summary in chunk_summaries for text in chunk_summary ]
-
-    return summaries
+    # summaries = [  __clean_text(text) for chunk_summary in chunk_summaries for text in chunk_summary ]
+    
+    return chunk_summaries
 
 def sentence_segmentation(document, minimum_n_words_to_accept_sentence, language):
     paragraphs = list(filter(lambda o: len(o.strip()) > 0, document.split('\n')))
@@ -224,3 +239,38 @@ def sentence_segmentation(document, minimum_n_words_to_accept_sentence, language
     paragraph_sentences = filter(lambda o: len(normal_word_tokenizer.tokenize(o)) >= minimum_n_words_to_accept_sentence, paragraph_sentences)
 
     return list(paragraph_sentences)
+
+
+#approach 5
+def recursive_bart_summarization(document, max_length=1024, min_length=0, num_beams=4, repetition_penalty=2.0, length_penalty=2.0):
+    device = 'cuda'
+    global tokenizer, model
+    # Divide the document into chunks
+    chunks = [document[i:i+max_length] for i in range(0, len(document), max_length)]
+    
+    # Initialize variables for summary and previous context
+    summary = ""
+    prev_context = ""
+    summaryList = []
+    # Iterate over the chunks and generate summary for each chunk recursively
+    for chunk in chunks:
+        # Combine the previous context with the current chunk
+        text = chunk
+        
+        # Tokenize the text
+        inputs = tokenizer.encode(text, return_tensors='pt')
+        
+        # Generate summary using beam search
+        outputs = model.generate(inputs, max_length=max_length, min_length=min_length,num_beams=num_beams, repetition_penalty=repetition_penalty, length_penalty=length_penalty, early_stopping=True, no_repeat_ngram_size=6)
+        
+        # Decode the summary
+        summary_chunk = tokenizer.decode(outputs[0], skip_special_tokens=True)
+        
+        # Add the summary chunk to the final summary
+        summaryList.append(summary_chunk)
+        summary += summary_chunk
+        
+        # Update previous context with the current chunk
+        # prev_context = chunk
+    
+    return summaryList
